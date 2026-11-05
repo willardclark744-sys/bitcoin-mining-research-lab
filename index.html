@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0b0f14">
+<title>Bitcoin Mining Research Lab</title>
+<style>
+:root{--bg:#0b0f14;--card:#121922;--line:#223040;--tx:#e6edf3;--mu:#8b9bb0;--ac:#f7931a;--ok:#3fb950;--bad:#f85149;--sim:#a371f7;--live:#2f81f7;--hist:#d29922}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 40px}
+main{max-width:720px;margin:auto;padding:12px}h1{font-size:1.35rem;margin:8px 0 2px}h2{font-size:1.1rem;margin:0 0 8px}h3{font-size:.95rem;margin:12px 0 4px;color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+.mu{color:var(--mu);font-size:.88rem}.mono{font-family:ui-monospace,Menlo,monospace;font-size:.8rem;word-break:break-all}
+button{min-height:48px;border-radius:12px;border:1px solid var(--line);background:#1b2633;color:var(--tx);font-size:1rem;padding:10px 14px;margin:4px 4px 4px 0}
+button.big{width:100%;min-height:64px;font-size:1.2rem;font-weight:700;background:var(--ac);color:#111;border:0}
+button.stop{background:var(--bad);color:#fff;border:0}button:disabled{opacity:.4}
+.tag{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:6px;margin-right:4px;vertical-align:middle}
+.LIVE{background:var(--live)}.SIM{background:var(--sim)}.HIST{background:var(--hist);color:#111}.MEAS{background:var(--ok);color:#111}.EXP{background:#6e7681}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.kv{background:#0e141b;border-radius:10px;padding:8px}.kv b{display:block;font-size:1.15rem}
+input[type=range]{width:100%;height:36px}input[type=number]{width:100%;min-height:44px;background:#0e141b;color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px;font-size:1rem}
+label{display:block;margin-top:8px;font-size:.92rem}details summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:.82rem}td,th{border-bottom:1px solid var(--line);padding:5px 3px;text-align:left}
+.ok{color:var(--ok)}.bad{color:var(--bad)}progress{width:100%;height:10px}
+</style></head><body><main>
+<h1>Bitcoin Mining Research Lab</h1>
+<div class="mu">Prepared for Travis Walden · candidate rig: Bitaxe Gamma 601 (1.2–1.5 TH/s). Labels: <span class="tag LIVE">LIVE</span>network data <span class="tag MEAS">MEASURED</span>timed here <span class="tag SIM">SIMULATED</span>model <span class="tag HIST">HISTORICAL</span>replay <span class="tag EXP">EXPERIMENTAL</span>easy-target proxy. No BTC earnings are shown: there is no verifiable payout.</div>
+
+<section class="card" id="live"><h2><span class="tag LIVE">LIVE</span>Bitcoin network</h2><div id="liveBody" class="mu">Loading…</div><button onclick="loadLive()">Refresh</button></section>
+
+<section class="card"><h2>Experiment 1 · Midstate reuse vs full double SHA-256</h2>
+<div class="mu">Fresh random 80-byte headers. Same headers and nonces for every method. Baseline = generic double SHA-256 (3 compressions + padding/alloc per nonce). Optimized = cache SHA-256 state after the first 64 bytes, then per nonce: 2nd inner chunk (16 bytes + padding) + outer SHA-256 of the 32-byte digest = 2 compressions. Fair baseline = same code without caching (3 compressions). Ideal compression-count ratio: 1.5×.</div>
+<button class="big" id="runBtn" onclick="runExp1()">▶ Run first experiment</button>
+<button class="stop" id="stopBtn" onclick="stopExp1()" disabled>■ Stop</button>
+<progress id="prog" value="0" max="1"></progress>
+<div id="exp1"></div>
+<div id="exp1dl" style="display:none"><button onclick="dl('json')">Download log JSON</button><button onclick="dl('csv')">Download log CSV</button></div>
+<h3><span class="tag MEAS">MEASURED</span>Baked-in Node run (server, not your phone)</h3><div id="fixture"></div>
+</section>
+
+<section class="card"><h2>Experiment notebook</h2><div class="mu">Three questions tested so far ⇒ any p-value is compared with α = 0.05/3 ≈ 0.017 (Bonferroni). “No measurable advantage” is a valid result.</div>
+
+<details open><summary>Q1 · Can we do the same work more efficiently?</summary>
+<p><b>Hypothesis:</b> Reusing unchanged work (midstate, AsicBoost, version rolling) cuts compute per useful header hash.</p>
+<p><b>Prior research:</b> Midstate is standard since early GPU/FPGA miners; the host computes it once per job and the ASIC only varies the nonce. Bitaxe ASICs (BM1370 in Gamma 601) receive the midstate/job from AxeOS (ESP-Miner). <b>AsicBoost</b> (Hanke 2016): find several header variants whose first 64-byte chunk differs but whose last 4 bytes of merkle root collide, so the second-chunk message schedule is shared — saves ~20–30% of compute <i>inside the chip</i>. <b>Overt AsicBoost = version rolling</b> (BIP 320 bits, Stratum <code>mining.configure version-rolling</code>, BIP 310): the chip/firmware rolls version bits to produce multiple midstates cheaply. AxeOS already enables version rolling for BM13xx chips. Repeated work across workers: pools/stratum give unique extranonce1, so overlap is avoided by protocol; duplicate search only arises from misconfiguration.</p>
+<table><tr><th>Idea</th><th>In Bitaxe/AxeOS today?</th><th>Needs chip?</th><th>Phone can test?</th></tr>
+<tr><td>Midstate reuse</td><td>Yes (standard)</td><td>No</td><td class="ok">Yes – Exp 1</td></tr>
+<tr><td>Version rolling / overt AsicBoost</td><td>Yes (BM13xx + stratum)</td><td>Yes, gain is in-silicon</td><td>Simulate correctness only; no ASIC gain claim</td></tr>
+<tr><td>Covert AsicBoost (merkle collision)</td><td>No</td><td>Yes + collision search</td><td>No</td></tr>
+<tr><td>Duplicate work across workers</td><td>Avoided by extranonce</td><td>No</td><td>Logic only</td></tr></table>
+<p><b>Test:</b> Exp 1 (above) + version-roll demo below (changing version bits changes the first chunk ⇒ new midstate, verified by independent hash).</p>
+<button onclick="versionDemo()">Run version-rolling correctness demo</button><div id="vdemo" class="mono"></div>
+<p><b>Result:</b> <span id="q1res">See Exp 1. Midstate is a real, already-captured saving; it gives a Bitaxe owner nothing new.</span></p>
+<p><b>What would disprove it:</b> optimized hashes differing from baseline (correctness), or speedup ≤1.0× on the fair baseline over repeated rounds.</p>
+<p><b>Uncertainty:</b> JS timing varies with JIT warm-up, thermal throttling, Low Power Mode; we report median and range over rounds and discard the first round as warm-up. Phone results say nothing about joules/TH. <b>Missing measurement:</b> Bitaxe J/TH with version rolling on vs off needs the ASIC + a wall-power meter (W at the plug) and AxeOS hashrate over ≥1 h each.</p>
+</details>
+
+<details><summary>Q2 · Can we recover work that gets wasted?</summary>
+<p><b>Hypothesis:</b> Stale jobs, Wi-Fi drops and slow block switches waste a meaningful fraction of a Bitaxe's hashes.</p>
+<p><b>Prior research:</b> Pools report stale/reject rates typically &lt;1% on good links; block-switch latency is usually under 1 s with stratum <code>clean_jobs</code>. Each second of delay after a new block wastes ≈ 1/600 of expected block time.</p>
+<p><span class="tag SIM">SIMULATED</span> model: useful H/s = H × (1−stale) × (1−downtime/1440) × (1−delay/600)</p>
+<label>Hashrate: <b id="vh"></b> TH/s<input type="range" id="sh" min="1.0" max="1.6" step="0.01" value="1.35"></label>
+<label>Stale / rejected jobs: <b id="vs"></b> %<input type="range" id="ss" min="0" max="10" step="0.1" value="0.5"></label>
+<label>Wi-Fi downtime: <b id="vw"></b> min/day<input type="range" id="sw" min="0" max="120" step="1" value="5"></label>
+<label>Block-switch delay: <b id="vd"></b> s<input type="range" id="sd" min="0" max="30" step="0.1" value="1"></label>
+<div id="q2out"></div>
+<h3><span class="tag MEAS">MEASURED</span>Your AxeOS readings (optional, saved on this phone)</h3>
+<div class="grid"><label>Avg hashrate TH/s<input type="number" id="mh" step="0.01"></label><label>Rejected shares %<input type="number" id="mr" step="0.01"></label><label>Uptime % (24h)<input type="number" id="mu" step="0.1"></label><label>Wall power W<input type="number" id="mw" step="0.1"></label></div>
+<div id="q2meas" class="mu"></div>
+<p><b>What would disprove it:</b> measured AxeOS rejects &lt;0.5% and uptime &gt;99.5% ⇒ total recoverable &lt;1%, i.e. nothing worth chasing.</p>
+<p><b>Uncertainty:</b> model is multiplicative/independent; real losses correlate (Wi-Fi drop ⇒ stale). Solo odds are a Poisson expectation, not a forecast.</p>
+</details>
+
+<details><summary>Q3 · Can any strategy pick better candidates?</summary>
+<p><b>Hypothesis (to be rejected by default):</b> nonce patterns, timestamp choices, or "AI-selected" nonces find valid hashes faster than sequential search.</p>
+<p><b>Prior research:</b> SHA-256d output is pseudorandom; any nonce/timestamp has the same probability ≤ target. Apparent patterns in historical winning nonces come from hardware search order (e.g. chips splitting nonce space), not from the hash.</p>
+<p><b>Pre-declared metric:</b> shares (hashes ≤ easy target, 12 leading zero bits) per hash spent, where prediction cost is counted in hash-equivalents. Fresh random headers each trial, equal budget per strategy, 30 trials, independent verifier re-hashes every share with the generic path. Test: two-sided z-test on rate vs baseline, Bonferroni α = 0.05/3.</p>
+<span class="tag EXP">EXPERIMENTAL</span><span class="mu">Easy target is a proxy to get sample size; it is not the real network target.</span><br>
+<button onclick="runQ3()" id="q3btn">Run Q3 trial set (fresh data)</button><progress id="q3p" value="0" max="1"></progress><div id="q3out"></div>
+<h3><span class="tag HIST">HISTORICAL</span>Correctness check only</h3><div id="genesis" class="mono"></div>
+<p><b>What would disprove the null:</b> a strategy beating baseline with p &lt; 0.017 and replicating on a fresh rerun.</p>
+<p><b>Uncertainty:</b> 3 strategies × reruns inflate false positives; one "win" must replicate before being believed.</p>
+</details></section>
+
+<section class="card"><h2>Three takeaways</h2><ol id="takeaways"></ol></section>
+<div class="mu">Source: sha.js (pure-JS SHA-256 with midstate), bench-core.js, worker.js, app.js. Live data: mempool.space API (fallback blockstream.info).</div>
+</main>
+<script src="sha.js"></script><script src="bench-core.js"></script><script src="fixture.js"></script><script src="app.js"></script>
+</body></html>
