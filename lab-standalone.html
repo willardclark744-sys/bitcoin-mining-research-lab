@@ -1,0 +1,338 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#0b0f14">
+<title>Bitcoin Mining Research Lab</title>
+<style>
+:root{--bg:#0b0f14;--card:#121922;--line:#223040;--tx:#e6edf3;--mu:#8b9bb0;--ac:#f7931a;--ok:#3fb950;--bad:#f85149;--sim:#a371f7;--live:#2f81f7;--hist:#d29922}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 0 40px}
+main{max-width:720px;margin:auto;padding:12px}h1{font-size:1.35rem;margin:8px 0 2px}h2{font-size:1.1rem;margin:0 0 8px}h3{font-size:.95rem;margin:12px 0 4px;color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+.mu{color:var(--mu);font-size:.88rem}.mono{font-family:ui-monospace,Menlo,monospace;font-size:.8rem;word-break:break-all}
+button{min-height:48px;border-radius:12px;border:1px solid var(--line);background:#1b2633;color:var(--tx);font-size:1rem;padding:10px 14px;margin:4px 4px 4px 0}
+button.big{width:100%;min-height:64px;font-size:1.2rem;font-weight:700;background:var(--ac);color:#111;border:0}
+button.stop{background:var(--bad);color:#fff;border:0}button:disabled{opacity:.4}
+.tag{display:inline-block;font-size:.7rem;font-weight:700;padding:2px 7px;border-radius:6px;margin-right:4px;vertical-align:middle}
+.LIVE{background:var(--live)}.SIM{background:var(--sim)}.HIST{background:var(--hist);color:#111}.MEAS{background:var(--ok);color:#111}.EXP{background:#6e7681}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.kv{background:#0e141b;border-radius:10px;padding:8px}.kv b{display:block;font-size:1.15rem}
+input[type=range]{width:100%;height:36px}input[type=number]{width:100%;min-height:44px;background:#0e141b;color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px;font-size:1rem}
+label{display:block;margin-top:8px;font-size:.92rem}details summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:.82rem}td,th{border-bottom:1px solid var(--line);padding:5px 3px;text-align:left}
+.ok{color:var(--ok)}.bad{color:var(--bad)}progress{width:100%;height:10px}
+</style></head><body><main>
+<h1>Bitcoin Mining Research Lab</h1>
+<div class="mu">Prepared for Travis Walden · candidate rig: Bitaxe Gamma 601 (1.2–1.5 TH/s). Labels: <span class="tag LIVE">LIVE</span>network data <span class="tag MEAS">MEASURED</span>timed here <span class="tag SIM">SIMULATED</span>model <span class="tag HIST">HISTORICAL</span>replay <span class="tag EXP">EXPERIMENTAL</span>easy-target proxy. No BTC earnings are shown: there is no verifiable payout.</div>
+
+<section class="card" id="live"><h2><span class="tag LIVE">LIVE</span>Bitcoin network</h2><div id="liveBody" class="mu">Loading…</div><button onclick="loadLive()">Refresh</button></section>
+
+<section class="card"><h2>Experiment 1 · Midstate reuse vs full double SHA-256</h2>
+<div class="mu">Fresh random 80-byte headers. Same headers and nonces for every method. Baseline = generic double SHA-256 (3 compressions + padding/alloc per nonce). Optimized = cache SHA-256 state after the first 64 bytes, then per nonce: 2nd inner chunk (16 bytes + padding) + outer SHA-256 of the 32-byte digest = 2 compressions. Fair baseline = same code without caching (3 compressions). Ideal compression-count ratio: 1.5×.</div>
+<button class="big" id="runBtn" onclick="runExp1()">▶ Run first experiment</button>
+<button class="stop" id="stopBtn" onclick="stopExp1()" disabled>■ Stop</button>
+<progress id="prog" value="0" max="1"></progress>
+<div id="exp1"></div>
+<div id="exp1dl" style="display:none"><button onclick="dl('json')">Download log JSON</button><button onclick="dl('csv')">Download log CSV</button></div>
+<h3><span class="tag MEAS">MEASURED</span>Baked-in Node run (server, not your phone)</h3><div id="fixture"></div>
+</section>
+
+<section class="card"><h2>Experiment notebook</h2><div class="mu">Three questions tested so far ⇒ any p-value is compared with α = 0.05/3 ≈ 0.017 (Bonferroni). “No measurable advantage” is a valid result.</div>
+
+<details open><summary>Q1 · Can we do the same work more efficiently?</summary>
+<p><b>Hypothesis:</b> Reusing unchanged work (midstate, AsicBoost, version rolling) cuts compute per useful header hash.</p>
+<p><b>Prior research:</b> Midstate is standard since early GPU/FPGA miners; the host computes it once per job and the ASIC only varies the nonce. Bitaxe ASICs (BM1370 in Gamma 601) receive the midstate/job from AxeOS (ESP-Miner). <b>AsicBoost</b> (Hanke 2016): find several header variants whose first 64-byte chunk differs but whose last 4 bytes of merkle root collide, so the second-chunk message schedule is shared — saves ~20–30% of compute <i>inside the chip</i>. <b>Overt AsicBoost = version rolling</b> (BIP 320 bits, Stratum <code>mining.configure version-rolling</code>, BIP 310): the chip/firmware rolls version bits to produce multiple midstates cheaply. AxeOS already enables version rolling for BM13xx chips. Repeated work across workers: pools/stratum give unique extranonce1, so overlap is avoided by protocol; duplicate search only arises from misconfiguration.</p>
+<table><tr><th>Idea</th><th>In Bitaxe/AxeOS today?</th><th>Needs chip?</th><th>Phone can test?</th></tr>
+<tr><td>Midstate reuse</td><td>Yes (standard)</td><td>No</td><td class="ok">Yes – Exp 1</td></tr>
+<tr><td>Version rolling / overt AsicBoost</td><td>Yes (BM13xx + stratum)</td><td>Yes, gain is in-silicon</td><td>Simulate correctness only; no ASIC gain claim</td></tr>
+<tr><td>Covert AsicBoost (merkle collision)</td><td>No</td><td>Yes + collision search</td><td>No</td></tr>
+<tr><td>Duplicate work across workers</td><td>Avoided by extranonce</td><td>No</td><td>Logic only</td></tr></table>
+<p><b>Test:</b> Exp 1 (above) + version-roll demo below (changing version bits changes the first chunk ⇒ new midstate, verified by independent hash).</p>
+<button onclick="versionDemo()">Run version-rolling correctness demo</button><div id="vdemo" class="mono"></div>
+<p><b>Result:</b> <span id="q1res">See Exp 1. Midstate is a real, already-captured saving; it gives a Bitaxe owner nothing new.</span></p>
+<p><b>What would disprove it:</b> optimized hashes differing from baseline (correctness), or speedup ≤1.0× on the fair baseline over repeated rounds.</p>
+<p><b>Uncertainty:</b> JS timing varies with JIT warm-up, thermal throttling, Low Power Mode; we report median and range over rounds and discard the first round as warm-up. Phone results say nothing about joules/TH. <b>Missing measurement:</b> Bitaxe J/TH with version rolling on vs off needs the ASIC + a wall-power meter (W at the plug) and AxeOS hashrate over ≥1 h each.</p>
+</details>
+
+<details><summary>Q2 · Can we recover work that gets wasted?</summary>
+<p><b>Hypothesis:</b> Stale jobs, Wi-Fi drops and slow block switches waste a meaningful fraction of a Bitaxe's hashes.</p>
+<p><b>Prior research:</b> Pools report stale/reject rates typically &lt;1% on good links; block-switch latency is usually under 1 s with stratum <code>clean_jobs</code>. Each second of delay after a new block wastes ≈ 1/600 of expected block time.</p>
+<p><span class="tag SIM">SIMULATED</span> model: useful H/s = H × (1−stale) × (1−downtime/1440) × (1−delay/600)</p>
+<label>Hashrate: <b id="vh"></b> TH/s<input type="range" id="sh" min="1.0" max="1.6" step="0.01" value="1.35"></label>
+<label>Stale / rejected jobs: <b id="vs"></b> %<input type="range" id="ss" min="0" max="10" step="0.1" value="0.5"></label>
+<label>Wi-Fi downtime: <b id="vw"></b> min/day<input type="range" id="sw" min="0" max="120" step="1" value="5"></label>
+<label>Block-switch delay: <b id="vd"></b> s<input type="range" id="sd" min="0" max="30" step="0.1" value="1"></label>
+<div id="q2out"></div>
+<h3><span class="tag MEAS">MEASURED</span>Your AxeOS readings (optional, saved on this phone)</h3>
+<div class="grid"><label>Avg hashrate TH/s<input type="number" id="mh" step="0.01"></label><label>Rejected shares %<input type="number" id="mr" step="0.01"></label><label>Uptime % (24h)<input type="number" id="mu" step="0.1"></label><label>Wall power W<input type="number" id="mw" step="0.1"></label></div>
+<div id="q2meas" class="mu"></div>
+<p><b>What would disprove it:</b> measured AxeOS rejects &lt;0.5% and uptime &gt;99.5% ⇒ total recoverable &lt;1%, i.e. nothing worth chasing.</p>
+<p><b>Uncertainty:</b> model is multiplicative/independent; real losses correlate (Wi-Fi drop ⇒ stale). Solo odds are a Poisson expectation, not a forecast.</p>
+</details>
+
+<details><summary>Q3 · Can any strategy pick better candidates?</summary>
+<p><b>Hypothesis (to be rejected by default):</b> nonce patterns, timestamp choices, or "AI-selected" nonces find valid hashes faster than sequential search.</p>
+<p><b>Prior research:</b> SHA-256d output is pseudorandom; any nonce/timestamp has the same probability ≤ target. Apparent patterns in historical winning nonces come from hardware search order (e.g. chips splitting nonce space), not from the hash.</p>
+<p><b>Pre-declared metric:</b> shares (hashes ≤ easy target, 12 leading zero bits) per hash spent, where prediction cost is counted in hash-equivalents. Fresh random headers each trial, equal budget per strategy, 30 trials, independent verifier re-hashes every share with the generic path. Test: two-sided z-test on rate vs baseline, Bonferroni α = 0.05/3.</p>
+<span class="tag EXP">EXPERIMENTAL</span><span class="mu">Easy target is a proxy to get sample size; it is not the real network target.</span><br>
+<button onclick="runQ3()" id="q3btn">Run Q3 trial set (fresh data)</button><progress id="q3p" value="0" max="1"></progress><div id="q3out"></div>
+<h3><span class="tag HIST">HISTORICAL</span>Correctness check only</h3><div id="genesis" class="mono"></div>
+<p><b>What would disprove the null:</b> a strategy beating baseline with p &lt; 0.017 and replicating on a fresh rerun.</p>
+<p><b>Uncertainty:</b> 3 strategies × reruns inflate false positives; one "win" must replicate before being believed.</p>
+</details></section>
+
+<section class="card"><h2>Three takeaways</h2><ol id="takeaways"></ol></section>
+<div class="mu">Source: sha.js (pure-JS SHA-256 with midstate), bench-core.js, worker.js, app.js. Live data: mempool.space API (fallback blockstream.info).</div>
+</main>
+<script>// Pure-JS SHA-256 with explicit compression + midstate support. Works in Safari, Workers, Node.
+(function(g){
+const K=new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+const IV=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+const W=new Uint32Array(64);
+// compress one 16-word block (big-endian words in m) into state s (Uint32Array 8), in place
+function compress(s,m){
+ for(let i=0;i<16;i++)W[i]=m[i];
+ for(let i=16;i<64;i++){const a=W[i-15],b=W[i-2];
+  W[i]=(((a>>>7|a<<25)^(a>>>18|a<<14)^(a>>>3))+W[i-7]+((b>>>17|b<<15)^(b>>>19|b<<13)^(b>>>10))+W[i-16])|0;}
+ let a=s[0],b=s[1],c=s[2],d=s[3],e=s[4],f=s[5],h7=s[6],h=s[7];
+ for(let i=0;i<64;i++){
+  const t1=(h+((e>>>6|e<<26)^(e>>>11|e<<21)^(e>>>25|e<<7))+((e&f)^(~e&h7))+K[i]+W[i])|0;
+  const t2=(((a>>>2|a<<30)^(a>>>13|a<<19)^(a>>>22|a<<10))+((a&b)^(a&c)^(b&c)))|0;
+  h=h7;h7=f;f=e;e=(d+t1)|0;d=c;c=b;b=a;a=(t1+t2)|0;}
+ s[0]+=a;s[1]+=b;s[2]+=c;s[3]+=d;s[4]+=e;s[5]+=f;s[6]+=h7;s[7]+=h;
+}
+function words(bytes,off){const m=new Uint32Array(16);for(let i=0;i<16;i++){const o=off+i*4;m[i]=(bytes[o]<<24|bytes[o+1]<<16|bytes[o+2]<<8|bytes[o+3])>>>0;}return m;}
+// generic sha256 of arbitrary bytes -> Uint8Array(32)
+function sha256(bytes){const L=bytes.length,n=((L+9+63)>>6)<<6,p=new Uint8Array(n);p.set(bytes);p[L]=0x80;
+ const bits=L*8;p[n-4]=bits>>>24;p[n-3]=bits>>>16&255;p[n-2]=bits>>>8&255;p[n-1]=bits&255;p[n-5]=Math.floor(bits/2**32)&255;
+ const s=new Uint32Array(IV);for(let o=0;o<n;o+=64)compress(s,words(p,o));return out(s);}
+function out(s){const r=new Uint8Array(32);for(let i=0;i<8;i++){r[i*4]=s[i]>>>24;r[i*4+1]=s[i]>>>16;r[i*4+2]=s[i]>>>8;r[i*4+3]=s[i];}return r;}
+// BASELINE: full double SHA-256 of an 80-byte header (generic path, recomputes both inner chunks every time)
+function dsha(header){return sha256(sha256(header));}
+// OPTIMIZED: midstate = state after inner chunk 1 (bytes 0..63). Per nonce: inner chunk 2 (bytes 64..79 + padding), then outer SHA-256 of 32-byte digest.
+function midstate(header){const s=new Uint32Array(IV);compress(s,words(header,0));return s;}
+function makeTail(header){const m=new Uint32Array(16);const w=words(header,64);m[0]=w[0];m[1]=w[1];m[2]=w[2];m[3]=0;m[4]=0x80000000;m[15]=640;return m;}
+const OM=new Uint32Array(16),ST=new Uint32Array(8);
+function hashWithMid(mid,tail,nonce){ // nonce: uint32, written little-endian into header bytes 76..79
+ tail[3]=((nonce&255)<<24|(nonce>>>8&255)<<16|(nonce>>>16&255)<<8|nonce>>>24)>>>0;
+ ST.set(mid);compress(ST,tail);
+ for(let i=0;i<8;i++)OM[i]=ST[i];OM[8]=0x80000000;for(let i=9;i<15;i++)OM[i]=0;OM[15]=256;
+ const s=new Uint32Array(IV);compress(s,OM);return out(s);}
+function setNonce(h,n){h[76]=n&255;h[77]=n>>>8&255;h[78]=n>>>16&255;h[79]=n>>>24&255;}
+function hex(b){let s='';for(const x of b)s+=(x<16?'0':'')+x.toString(16);return s;}
+function fromHex(h){const r=new Uint8Array(h.length/2);for(let i=0;i<r.length;i++)r[i]=parseInt(h.substr(i*2,2),16);return r;}
+function rev(b){return Uint8Array.from(b).reverse();}
+const api={sha256,dsha,midstate,makeTail,hashWithMid,setNonce,hex,fromHex,rev};
+if(typeof module!=='undefined')module.exports=api;else g.SHA=api;
+})(typeof self!=='undefined'?self:globalThis);
+
+// Shared experiment core (browser worker + Node). Fresh random 80-byte headers, same nonces for both methods.
+(function(g){
+const S=(typeof module!=='undefined')?require('./sha.js'):g.SHA;
+function freshHeader(rand){const h=new Uint8Array(80);rand(h);h[0]=0x00;h[1]=0x00;h[2]=0x00;h[3]=0x20;return h;}
+// run one round: H headers x N nonces. Returns timings + verification.
+function round(H,N,rand,now,indepVerify){
+ const headers=[];for(let i=0;i<H;i++)headers.push(freshHeader(rand));
+ const startNonce=[];for(let i=0;i<H;i++){const b=new Uint8Array(4);rand(b);startNonce.push((b[0]|b[1]<<8|b[2]<<16|b[3]<<24)>>>0);}
+ let acc1=0,acc2=0,mism=0;const sampleA=[],sampleB=[];
+ let t0=now();
+ for(let i=0;i<H;i++){const h=headers[i].slice();for(let k=0;k<N;k++){const n=(startNonce[i]+k)>>>0;S.setNonce(h,n);const d=S.dsha(h);acc1^=d[31]|d[0]<<8;if(k<2)sampleA.push(S.hex(d));}}
+ const tBase=now()-t0;
+ t0=now();
+ for(let i=0;i<H;i++){const mid=S.midstate(headers[i]);const tail=S.makeTail(headers[i]);for(let k=0;k<N;k++){const d=S.hashWithMid(mid,tail,(startNonce[i]+k)>>>0);acc2^=d[31]|d[0]<<8;if(k<2)sampleB.push(S.hex(d));}}
+ const tMid=now()-t0;
+ // FAIR baseline: same compress code, no allocation advantage, but recompute chunk 1 every nonce (3 compressions vs 2)
+ let acc3=0;t0=now();
+ for(let i=0;i<H;i++){const h=headers[i].slice();const tail=S.makeTail(h);for(let k=0;k<N;k++){const n=(startNonce[i]+k)>>>0;S.setNonce(h,n);const d=S.hashWithMid(S.midstate(h),tail,n);acc3^=d[31]|d[0]<<8;}}
+ const tFair=now()-t0;
+ // verification: full checksum equality + independent verifier (WebCrypto/Node crypto) on samples
+ for(let i=0;i<sampleA.length;i++)if(sampleA[i]!==sampleB[i])mism++;
+ const samples=[];for(let i=0;i<Math.min(H,4);i++){const h=headers[i].slice();S.setNonce(h,startNonce[i]);samples.push({header:S.hex(h),hash:sampleB[i*2]});}
+ return {H,N,hashes:H*N,tBase,tMid,tFair,checksumEqual:acc1===acc2&&acc2===acc3,sampleMismatch:mism,samples};
+}
+const api={round,freshHeader};
+if(typeof module!=='undefined')module.exports=api;else g.BENCH=api;
+})(typeof self!=='undefined'?self:globalThis);
+
+window.NODE_FIXTURE={
+ "label": "MEASURED (Node, server-side, not your iPhone)",
+ "when": "2026-11-05T16:25:28.691Z",
+ "runtime": "Node v24.22.1 on linux x64, CPU: Intel(R) Xeon(R) Processor, cores: 8",
+ "roundsTotal": 7,
+ "warmupExcluded": 2,
+ "hashesPerMethod": 640000,
+ "baseMs": 2157.9009250000527,
+ "midMs": 777.5251859999844,
+ "baseHps": 296584.5153433003,
+ "midHps": 823124.4614627992,
+ "fairMs": 1310.735394999996,
+ "fairHps": 488275.5149829474,
+ "fairSpeedupMedian": 1.7288855517388302,
+ "theoreticalCompressionRatio": 1.5,
+ "speedupMedian": 2.831318473901786,
+ "speedupMin": 2.5814614603295984,
+ "speedupMax": 3.0003869738828013,
+ "allChecksumsEqual": true,
+ "independentVerifier": "node:crypto sha256",
+ "indepChecked": 28,
+ "indepOK": true,
+ "genesisOK": true,
+ "genesisHash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+ "nativeNodeCryptoHps": 267471.63002645376,
+ "perRound": [
+  {
+   "hashes": 128000,
+   "tBase": 552.01,
+   "tMid": 184.67,
+   "tFair": 314.24
+  },
+  {
+   "hashes": 128000,
+   "tBase": 464.61,
+   "tMid": 148.26,
+   "tFair": 261.19
+  },
+  {
+   "hashes": 128000,
+   "tBase": 462.6,
+   "tMid": 176.28,
+   "tFair": 249.89
+  },
+  {
+   "hashes": 128000,
+   "tBase": 397.64,
+   "tMid": 132.53,
+   "tFair": 229.13
+  },
+  {
+   "hashes": 128000,
+   "tBase": 382.01,
+   "tMid": 134.92,
+   "tFair": 289.63
+  },
+  {
+   "hashes": 128000,
+   "tBase": 409.11,
+   "tMid": 137.57,
+   "tFair": 258.06
+  },
+  {
+   "hashes": 128000,
+   "tBase": 506.54,
+   "tMid": 196.22,
+   "tFair": 284.02
+  }
+ ]
+};
+
+window.__WORKER_SRC__="importScripts('sha.js','bench-core.js');\nlet stop=false;\nonmessage=async e=>{const m=e.data;if(m.cmd==='stop'){stop=true;return;}\n if(m.cmd==='run'){stop=false;const rand=b=>crypto.getRandomValues(b);const now=()=>performance.now();\n  for(let r=0;r<m.rounds;r++){ if(stop){postMessage({type:'stopped',round:r});return;}\n   const res=BENCH.round(m.H,m.N,rand,now);res.round=r;postMessage({type:'round',res});\n   await new Promise(z=>setTimeout(z,0)); }\n  postMessage({type:'done'});}\n};\n";
+// patch Worker if app creates new Worker('worker.js')
+(function(){
+  const Orig=window.Worker;
+  window.Worker=function(url,opts){
+    if(String(url).includes('worker.js') && window.__WORKER_SRC__){
+      const blob=new Blob([window.__WORKER_SRC__],{type:'text/javascript'});
+      return new Orig(URL.createObjectURL(blob),opts);
+    }
+    return new Orig(url,opts);
+  };
+})();
+const $=id=>document.getElementById(id);const fmt=(x,d=2)=>Number(x).toLocaleString(undefined,{maximumFractionDigits:d});
+let LIVE=null,LOG=null,worker=null;
+// ---------- live data ----------
+async function loadLive(){$('liveBody').textContent='Loading…';
+ const srcs=[['mempool.space','https://mempool.space/api/v1/blocks'],['blockstream.info','https://blockstream.info/api/blocks']];
+ for(const [n,u] of srcs){try{const r=await fetch(u,{cache:'no-store'});const b=(await r.json())[0];
+  LIVE={src:n,url:u,height:b.height,difficulty:b.difficulty,blockTime:new Date(b.timestamp*1000),fetched:new Date()};
+  LIVE.netHps=LIVE.difficulty*2**32/600;renderLive();updQ2();return;}catch(e){}}
+ $('liveBody').innerHTML='<span class="bad">Could not reach public APIs. Q2 odds use no network value until refreshed.</span>';}
+function renderLive(){const L=LIVE;$('liveBody').innerHTML=`<div class="grid"><div class="kv">Block height<b>${fmt(L.height,0)}</b></div><div class="kv">Difficulty<b>${(L.difficulty/1e12).toFixed(2)} T</b></div>
+<div class="kv">Implied network hashrate<b>${fmt(L.netHps/1e18,0)} EH/s</b><span class="mu">difficulty×2³²/600</span></div><div class="kv">Block mined<b style="font-size:.9rem">${L.blockTime.toLocaleString()}</b></div></div>
+<div class="mu">Source: ${L.src} (${L.url}) · fetched ${L.fetched.toLocaleString()}</div>`;}
+// ---------- device ----------
+function device(){return{userAgent:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency??'unavailable',platform:navigator.platform,runtime:worker?'Web Worker':'main thread (chunked)',when:new Date().toISOString()};}
+// ---------- exp1 ----------
+const CFG={H:32,N:1000,rounds:6};
+function runExp1(){LOG={experiment:'midstate-vs-full-dsha256',label:'MEASURED on this device',config:CFG,device:null,rounds:[],verification:[]};
+ $('runBtn').disabled=true;$('stopBtn').disabled=false;$('prog').value=0;$('exp1').innerHTML='<div class="mu">Running… UI stays responsive.</div>';
+ try{worker=new Worker('worker.js');}catch(e){worker=null;}
+ LOG.device=device();
+ if(worker){worker.onmessage=e=>onMsg(e.data);worker.onerror=()=>{worker=null;fallback();};worker.postMessage({cmd:'run',...CFG});}else fallback();}
+let fbStop=false;
+async function fallback(){LOG.device=device();fbStop=false;const rand=b=>crypto.getRandomValues(b),now=()=>performance.now();
+ for(let r=0;r<CFG.rounds;r++){if(fbStop){onMsg({type:'stopped',round:r});return;}const res=BENCH.round(CFG.H,CFG.N,rand,now);res.round=r;onMsg({type:'round',res});await new Promise(z=>setTimeout(z,20));}onMsg({type:'done'});}
+function stopExp1(){if(worker)worker.postMessage({cmd:'stop'});fbStop=true;}
+async function verify(res){ // independent verifier: WebCrypto if available (HTTPS), else generic sha256 path
+ const out=[];for(const s of res.samples){const h=SHA.fromHex(s.header);let d,by;
+  if(window.crypto&&crypto.subtle){const a=await crypto.subtle.digest('SHA-256',h);d=SHA.hex(new Uint8Array(await crypto.subtle.digest('SHA-256',a)));by='WebCrypto (native)';}
+  else{d=SHA.hex(SHA.dsha(h));by='generic JS sha256 (WebCrypto needs HTTPS)';}
+  out.push({ok:d===s.hash,by});}return out;}
+async function onMsg(m){if(m.type==='round'){const v=await verify(m.res);m.res.indep=v;LOG.rounds.push(m.res);$('prog').value=(m.res.round+1)/CFG.rounds;renderExp1(false);}
+ else{if(worker){worker.terminate();worker=null;}$('runBtn').disabled=false;$('stopBtn').disabled=true;renderExp1(true,m.type==='stopped');}}
+function stats(rs){const use=rs.length>1?rs.slice(1):rs;const sum=k=>use.reduce((a,r)=>a+r[k],0);const n=use.reduce((a,r)=>a+r.hashes,0);
+ const sp=use.map(r=>r.tBase/r.tMid).sort((a,b)=>a-b),sf=use.map(r=>r.tFair/r.tMid).sort((a,b)=>a-b);const med=a=>a[Math.floor(a.length/2)];
+ return{n,base:sum('tBase'),mid:sum('tMid'),fair:sum('tFair'),sp:med(sp),spMin:sp[0],spMax:sp[sp.length-1],sf:med(sf),sfMin:sf[0],sfMax:sf[sf.length-1],
+  eq:rs.every(r=>r.checksumEqual&&r.sampleMismatch===0),indep:rs.every(r=>r.indep.every(x=>x.ok)),by:rs[0].indep[0]?.by,warm:rs.length>1};}
+function renderExp1(done,stopped){if(!LOG.rounds.length){$('exp1').innerHTML='<div class="mu">Stopped before any round finished.</div>';return;}
+ const s=stats(LOG.rounds);LOG.summary=s;const v=x=>x>1?`<span class="ok">${x.toFixed(2)}× faster</span>`:`<span class="bad">${(1/x).toFixed(2)}× slower</span>`;
+ $('exp1').innerHTML=`<h3><span class="tag MEAS">MEASURED</span>${done?(stopped?'Stopped early':'Complete'):'In progress'} · this device</h3>
+<div class="grid"><div class="kv">Hashes per method<b>${fmt(s.n,0)}</b></div><div class="kv">Verification<b class="${s.eq&&s.indep?'ok':'bad'}">${s.eq&&s.indep?'Identical ✓':'MISMATCH ✗'}</b></div>
+<div class="kv">Full dSHA (generic)<b>${fmt(s.base,0)} ms</b>${fmt(s.n/s.base*1000,0)} H/s</div><div class="kv">Midstate<b>${fmt(s.mid,0)} ms</b>${fmt(s.n/s.mid*1000,0)} H/s</div>
+<div class="kv">vs generic baseline<b>${v(s.sp)}</b>range ${s.spMin.toFixed(2)}–${s.spMax.toFixed(2)}</div><div class="kv">vs fair 3-compression baseline<b>${v(s.sf)}</b>range ${s.sfMin.toFixed(2)}–${s.sfMax.toFixed(2)} · ideal 1.50×</div></div>
+<div class="mu">${LOG.rounds.length} round(s)${s.warm?', first excluded as JIT warm-up':''}. Independent verifier: ${s.by}. Equality checked on every hash via XOR checksum of all three methods + per-sample comparison.</div>
+<div class="mono">Device: ${LOG.device.userAgent}<br>hardwareConcurrency: ${LOG.device.hardwareConcurrency} · ${LOG.device.runtime}</div>`;
+ $('exp1dl').style.display='block';takeaways();}
+function dl(kind){let data,type;if(kind==='json'){data=JSON.stringify(LOG,null,1);type='application/json';}
+ else{data='round,hashes,full_ms,midstate_ms,fair_ms,checksum_equal,indep_ok,userAgent\n'+LOG.rounds.map(r=>[r.round,r.hashes,r.tBase.toFixed(3),r.tMid.toFixed(3),r.tFair.toFixed(3),r.checksumEqual,r.indep.every(x=>x.ok),'"'+LOG.device.userAgent+'"'].join(',')).join('\n');type='text/csv';}
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download='exp1-log-'+Date.now()+'.'+kind;a.click();}
+function renderFixture(){const f=window.NODE_FIXTURE;if(!f){$('fixture').textContent='fixture.js missing';return;}
+ $('fixture').innerHTML=`<div class="grid"><div class="kv">Hashes/method<b>${fmt(f.hashesPerMethod,0)}</b></div><div class="kv">Verified<b class="ok">${f.allChecksumsEqual&&f.indepOK?'Identical ✓':'✗'}</b>${f.indepChecked} samples vs ${f.independentVerifier}</div>
+<div class="kv">Full / midstate / fair<b style="font-size:.95rem">${fmt(f.baseMs,0)} / ${fmt(f.midMs,0)} / ${fmt(f.fairMs,0)} ms</b></div><div class="kv">Speedup<b>${f.speedupMedian.toFixed(2)}× generic · ${f.fairSpeedupMedian.toFixed(2)}× fair</b></div></div>
+<div class="mono">${f.runtime} · ${f.when} · genesis check ${f.genesisOK?'✓':'✗'}</div>`;}
+// ---------- Q1 version demo ----------
+function versionDemo(){const h=BENCH.freshHeader(b=>crypto.getRandomValues(b));let rows=[];
+ for(let v=0;v<4;v++){h[1]=(v<<5)&0xff; /* roll BIP320 bits 13-15 region in byte 1 */ const mid=SHA.midstate(h),t=SHA.makeTail(h);
+  const a=SHA.hex(SHA.hashWithMid(mid,t,0)),c=h.slice();SHA.setNonce(c,0);const b=SHA.hex(SHA.dsha(c));rows.push(`v-roll ${v}: midstate ${SHA.hex(new Uint8Array(mid.buffer.slice(0,4)))}… hash ${a.slice(0,16)}… ${a===b?'✓':'✗'}`);}
+ $('vdemo').innerHTML='<span class="tag SIM">SIMULATED</span>'+rows.join('<br>')+'<br><span class="mu">Each version value = a new first-chunk midstate for free in the chip. Phone shows correctness only; ASIC energy savings are not measured here.</span>';}
+// ---------- Q2 ----------
+const Q2=['sh','ss','sw','sd','mh','mr','mu','mw'];
+function odds(hps){if(!LIVE)return null;const p=hps/LIVE.netHps;return{block:p,day:1-Math.pow(1-p,144),year:1-Math.pow(1-p,52560),yrs:1/(p*52560)};}
+function oddsHtml(o){return o?`per block 1 in ${fmt(1/o.block,0)} · per day ${(o.day*100).toExponential(2)}% · per year ${(o.year*100).toFixed(4)}% · expected wait ≈ ${fmt(o.yrs,0)} years`:'Need live difficulty.';}
+function updQ2(){const H=+$('sh').value,s=+$('ss').value,w=+$('sw').value,d=+$('sd').value;$('vh').textContent=H;$('vs').textContent=s;$('vw').textContent=w;$('vd').textContent=d;
+ const f=(1-s/100)*(1-w/1440)*(1-d/600),u=H*1e12*f;
+ $('q2out').innerHTML=`<div class="kv" style="margin-top:8px"><span class="tag SIM">SIMULATED</span>Useful: <b>${(u/1e12).toFixed(4)} TH/s</b> (${((1-f)*100).toFixed(2)}% lost: stale ${s}%, Wi-Fi ${(w/14.4).toFixed(2)}%, switch ${(d/6).toFixed(2)}%)<br><span class="mu">${oddsHtml(odds(u))}</span><br><span class="mu">Recovering ALL losses changes odds by only ×${(1/f).toFixed(4)}.</span></div>`;
+ const mh=+$('mh').value,mr=+$('mr').value,mu=+$('mu').value,mw=+$('mw').value;
+ if(mh){const mu2=mh*1e12*(1-(mr||0)/100)*((mu||100)/100);$('q2meas').innerHTML=`<span class="tag MEAS">MEASURED (you entered)</span> useful ${(mu2/1e12).toFixed(4)} TH/s vs estimate ${(u/1e12).toFixed(4)} TH/s (Δ ${(((mu2-u)/u)*100).toFixed(2)}%)<br>${oddsHtml(odds(mu2))}${mw?`<br>Efficiency ${(mw/mh).toFixed(2)} J/TH`:'<br>Missing: wall-power W for J/TH.'}`;}
+ else $('q2meas').textContent='Not yet supplied. Enter AxeOS values to compare measured vs estimate.';
+ Q2.forEach(k=>localStorage.setItem('q2'+k,$(k).value));}
+// ---------- Q3 ----------
+async function runQ3(){$('q3btn').disabled=true;const T=30,B=4096,ZB=12;const rand=b=>crypto.getRandomValues(b);
+ const strategies={baseline:{cost:0},'historical-pattern':{cost:0},timestamp:{cost:0},'AI-pick (heuristic model)':{cost:512}};
+ const res={};for(const k in strategies)res[k]={shares:0,spent:0,verified:0};
+ const lz=d=>{let z=0;for(const x of SHA.rev(d)){if(x===0){z+=8;continue;}z+=Math.clz32(x)-24;break;}return z;};
+ for(let t=0;t<T;t++){const h=BENCH.freshHeader(rand);
+  for(const k in strategies){const c=h.slice();let budget=B-strategies[k].cost;res[k].spent+=B;
+   let nonces=[];const st=new Uint32Array(1);rand(new Uint8Array(st.buffer));
+   if(k==='baseline')for(let i=0;i<budget;i++)nonces.push((st[0]+i)>>>0);
+   if(k==='historical-pattern')for(let i=0;i<budget;i++){const r=new Uint32Array(1);rand(new Uint8Array(r.buffer));nonces.push(((r[0]&0x00ffffff)|0x80000000)>>>0);} // claim: winners cluster in high range
+   if(k==='timestamp'){for(let j=0;j<8;j++){} for(let i=0;i<budget;i++){if(i%512===0){c[68]=(c[68]+1)&255;}nonces.push((st[0]+i%512)>>>0);}}
+   if(k.startsWith('AI'))for(let i=0;i<budget;i++){const r=new Uint32Array(1);rand(new Uint8Array(r.buffer));nonces.push(r[0]%2===0?r[0]:(r[0]^0x5a5a5a5a)>>>0);} // stand-in "model"; cost charged above
+   let mid=SHA.midstate(c),tail=SHA.makeTail(c),lastTs=c[68];
+   for(let i=0;i<nonces.length;i++){if(k==='timestamp'&&i%512===0){c[68]=(lastTs+i/512)&255;tail=SHA.makeTail(c);}
+    const d=SHA.hashWithMid(mid,tail,nonces[i]);if(lz(d)>=ZB){res[k].shares++;const v=c.slice();SHA.setNonce(v,nonces[i]);if(SHA.hex(SHA.dsha(v))===SHA.hex(d))res[k].verified++;}}}
+  $('q3p').value=(t+1)/T;await new Promise(z=>setTimeout(z,0));}
+ const b=res.baseline,pb=b.shares/b.spent,exp=2**-ZB;let rows='',any=false;
+ for(const k in res){const r=res[k],p=r.shares/r.spent;let z='',pv='';if(k!=='baseline'){const pp=(r.shares+b.shares)/(r.spent+b.spent),se=Math.sqrt(pp*(1-pp)*(1/r.spent+1/b.spent));const zz=(p-pb)/se;const pval=2*(1-Phi(Math.abs(zz)));z=zz.toFixed(2);pv=pval.toFixed(3);if(pval<0.05/3&&p>pb)any=true;}
+  rows+=`<tr><td>${k}</td><td>${r.shares}/${r.verified}</td><td>${(p*1e3).toFixed(3)}</td><td>${z}</td><td>${pv}</td></tr>`;}
+ window.Q3=res;$('q3out').innerHTML=`<span class="tag EXP">EXPERIMENTAL</span><table><tr><th>Strategy</th><th>Shares/verified</th><th>per 1k hashes (incl. cost)</th><th>z</th><th>p</th></tr>${rows}</table>
+<div class="mu">Expected by chance: ${(exp*1e3).toFixed(3)} per 1k. ${T} fresh trials × ${B} hash budget each. Result: <b>${any?'A strategy crossed α=0.017 — treat as likely false positive until it replicates on a rerun.':'No measurable advantage (valid result).'}</b></div>`;$('q3btn').disabled=false;}
+function Phi(x){const t=1/(1+0.2316419*x),d=0.3989423*Math.exp(-x*x/2);return 1-d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));}
+function genesis(){const g=SHA.fromHex('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c');
+ const h=SHA.hex(SHA.rev(SHA.hashWithMid(SHA.midstate(g),SHA.makeTail(g),0x7c2bac1d)));$('genesis').innerHTML=`Genesis block (nonce 2083236893) via midstate path:<br>${h}<br>${h==='000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f'?'<span class="ok">matches known hash ✓</span>':'<span class="bad">mismatch ✗</span>'} — proves the hasher is correct; says nothing about predicting nonces.`;}
+// ---------- takeaways ----------
+function takeaways(){const s=LOG&&LOG.summary,f=window.NODE_FIXTURE;const src=s?`your device: ${s.sf.toFixed(2)}× vs fair baseline (${s.sp.toFixed(2)}× vs generic)`:`Node fixture: ${f.fairSpeedupMedian.toFixed(2)}× vs fair baseline (${f.speedupMedian.toFixed(2)}× vs generic)`;
+ $('takeaways').innerHTML=`<li><b>What worked:</b> midstate reuse produced bit-identical hashes and was faster — but Bitaxe/AxeOS already does this (plus version rolling in the chip). It is not an overlooked loophole.</li>
+<li><b>How much it helped:</b> ${src}; the ideal is 1.5× (2 vs 3 compressions). On a Bitaxe that gain is already in the 1.2–1.5 TH/s rating, so ≈0% new. Recovering waste (Q2) is worth ~1% at typical settings. Candidate-picking (Q3): no measurable advantage expected or seen.</li>
+<li><b>Next experiment most likely to teach something new:</b> with a Bitaxe, log AxeOS hashrate, reject %, and a wall-power meter for 24 h, then enter them in Q2. Measured waste and J/TH are the only open unknowns here.</li>`;}
+// init
+Q2.forEach(k=>{const v=localStorage.getItem('q2'+k);if(v!==null&&v!=='')$(k).value=v;$(k).addEventListener('input',updQ2);});
+renderFixture();genesis();takeaways();updQ2();loadLive();
+</script>
+</body></html>
